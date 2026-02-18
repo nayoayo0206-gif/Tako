@@ -3,149 +3,480 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>伴手禮紀錄助手</title>
-    
+    <title>My購了沒(˶˙๏˙˶)b</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
-        .loading-overlay { position: fixed; inset: 0; background: white; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; }
-        .loading-overlay.hidden { display: none; }
+        * { -webkit-tap-highlight-color: transparent; outline: none; box-sizing: border-box; }
+        body { background: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; padding-bottom: env(safe-area-inset-bottom); overflow-x: hidden; }
+        .wide-title { letter-spacing: 0.3em; text-indent: 0.3em; font-weight: 900; }
+        
+        #loading-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 100;
+            display: none; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+        }
+
+        .dark-input { background: #111; border: 1px solid #222; color: #fff; border-radius: 1rem; }
+        
+        .tag-btn { 
+            padding: 10px 18px; border-radius: 99px; font-size: 11px; font-weight: 800; 
+            white-space: nowrap; transition: 0.2s; 
+            background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3);
+            border: 1px solid transparent;
+        }
+        .tag-btn.active { background: #fff !important; color: #000 !important; transform: scale(1.05); }
+
+        .nav-btn svg { opacity: 0.3; transition: 0.3s; }
+        .nav-btn.active svg { opacity: 1; transform: scale(1.1); }
+        .nav-indicator { width: 4px; height: 1px; background: transparent; transition: 0.3s; margin-top: 4px; }
+        .nav-btn.active .nav-indicator { background: #fff; width: 12px; }
+        
+        .tag-scroll { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; scrollbar-width: none; }
+        .tag-scroll::-webkit-scrollbar { display: none; }
+        
+        .item-card { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* 彈窗樣式 */
+        #modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 200;
+            display: none; flex-direction: column; padding: 20px; overflow-y: auto;
+        }
+
+        .edit-tag-item {
+            display: inline-flex; align-items: center; gap: 8px;
+            background: #222; padding: 6px 12px; border-radius: 12px;
+            font-size: 12px; font-weight: 600; margin: 4px;
+        }
     </style>
 </head>
-<body class="bg-slate-100 min-h-screen pb-24 font-sans text-slate-900 select-none">
+<body class="pb-32">
 
-    <!-- 載入中遮罩 -->
-    <div id="auth-loading" class="loading-overlay">
-        <div class="text-3xl animate-bounce">✈️</div>
-        <div id="status-text" class="font-bold mt-4 text-slate-600">正在連接 Realtime Database...</div>
-        <div id="error-log" class="text-red-500 text-xs mt-4 px-10 text-center"></div>
+    <div id="loading-overlay">
+        <div class="text-[10px] wide-title animate-pulse">SYNCING...</div>
     </div>
 
-    <nav class="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b">
-        <div class="max-w-xl mx-auto px-6 py-4">
-            <h1 class="text-xl font-black mb-4">伴手禮助手 🎁</h1>
-            <div class="grid grid-cols-2 gap-3">
-                <div class="bg-blue-600 p-4 rounded-2xl text-white shadow-lg shadow-blue-200">
-                    <p class="text-[10px] font-bold opacity-80 uppercase">待買預算 (TWD)</p>
-                    <p class="text-xl font-black" id="planned-total">$0</p>
+    <!-- 標籤編輯彈窗 (改為清單模式) -->
+    <div id="modal-overlay">
+        <div class="max-w-md mx-auto w-full space-y-8 py-10">
+            <div class="flex justify-between items-center">
+                <h2 class="wide-title text-sm">管理標籤</h2>
+                <button onclick="closeModal()" class="bg-white/10 px-4 py-2 rounded-full text-[10px] font-bold">DONE</button>
+            </div>
+
+            <!-- 管理對象 -->
+            <div class="space-y-4">
+                <p class="text-[8px] font-bold text-white/20 uppercase tracking-widest">Target 對象管理</p>
+                <div class="flex gap-2">
+                    <input type="text" id="add-target-input" placeholder="新增對象..." class="flex-1 dark-input px-4 py-3 text-xs">
+                    <button onclick="quickAddTag('T')" class="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase">Add</button>
                 </div>
-                <div class="bg-emerald-500 p-4 rounded-2xl text-white shadow-lg shadow-emerald-200">
-                    <p class="text-[10px] font-bold opacity-80 uppercase">已花費 (TWD)</p>
-                    <p class="text-xl font-black" id="purchased-total">$0</p>
+                <div id="edit-targets-list" class="flex flex-wrap pt-2"></div>
+            </div>
+
+            <!-- 管理類別 -->
+            <div class="space-y-4">
+                <p class="text-[8px] font-bold text-white/20 uppercase tracking-widest">Category 類別管理</p>
+                <div class="flex gap-2">
+                    <input type="text" id="add-cat-input" placeholder="新增類別..." class="flex-1 dark-input px-4 py-3 text-xs">
+                    <button onclick="quickAddTag('C')" class="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase">Add</button>
+                </div>
+                <div id="edit-cats-list" class="flex flex-wrap pt-2"></div>
+            </div>
+            
+            <p class="text-center text-[9px] text-white/10">提示：點擊標籤旁的 ✕ 即可刪除</p>
+        </div>
+    </div>
+
+    <nav class="sticky top-0 z-40 bg-black/80 backdrop-blur-xl border-b border-white/5 p-6">
+        <div class="max-w-xl mx-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-lg wide-title">My購了沒(˶˙๏˙˶)b</h1>
+                <div class="flex gap-2">
+                    <button onclick="openModal()" class="p-2 opacity-30 active:opacity-100">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    </button>
+                    <button onclick="cloudSync()" class="p-2 opacity-30 active:opacity-100">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a3.5 3.5 0 0 0 0-7h-1.5a7 7 0 1 0-11.8 4.5"/><path d="M12 13v9"/><path d="m9 16 3-3 3 3"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div id="ex-rate" class="text-[9px] text-white/20 font-mono tracking-tighter mb-4">Rates: Local Cache</div>
+            <div class="flex gap-10">
+                <div>
+                    <p class="text-[8px] font-bold text-white/40 uppercase tracking-widest mb-1">Spent 已花費</p>
+                    <p class="text-2xl font-black" id="total-spent">$0</p>
+                </div>
+                <div>
+                    <p class="text-[8px] font-bold text-white/40 uppercase tracking-widest mb-1 text-zinc-600">Budget 待購</p>
+                    <p class="text-2xl font-black text-white/20" id="total-budget">$0</p>
                 </div>
             </div>
         </div>
     </nav>
 
-    <main class="max-w-xl mx-auto px-6 pt-6">
-        <!-- 輸入表單 -->
-        <section class="mb-8 bg-white p-6 rounded-[2rem] shadow-xl border border-white">
-            <div class="space-y-4">
-                <div class="grid grid-cols-3 gap-3">
-                    <select id="item-currency" class="px-3 py-3 border rounded-xl text-sm bg-slate-50 font-bold outline-none">
-                        <option value="TWD">TWD</option>
-                        <option value="KRW">KRW</option>
-                        <option value="JPY">JPY</option>
-                    </select>
-                    <input type="text" id="item-name" placeholder="想買什麼？" class="col-span-2 px-4 py-3 border rounded-xl text-sm outline-none bg-slate-50">
+    <main class="max-w-xl mx-auto px-6 mt-8">
+        <div id="view-list" class="space-y-8">
+            <section class="space-y-5">
+                <div>
+                    <p class="text-[8px] font-bold text-white/20 uppercase tracking-widest mb-2">Target 對象</p>
+                    <div id="ui-targets" class="tag-scroll"></div>
                 </div>
-                <input type="number" id="item-price" placeholder="預估價格" class="w-full px-4 py-3 border rounded-xl text-sm bg-slate-50 font-bold">
-                <button onclick="addItem()" class="w-full bg-slate-900 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-transform">
-                    加入購物清單
-                </button>
-            </div>
-        </section>
+                <div>
+                    <p class="text-[8px] font-bold text-white/20 uppercase tracking-widest mb-2">Category 類別</p>
+                    <div id="ui-categories" class="tag-scroll"></div>
+                </div>
+                
+                <div class="flex gap-2">
+                    <select id="in-curr" class="dark-input px-3 py-4 text-[10px] font-bold">
+                        <option value="TWD">TWD</option><option value="KRW">KRW</option><option value="JPY">JPY</option><option value="USD">USD</option>
+                    </select>
+                    <input type="text" id="in-name" placeholder="想買什麼？" class="flex-1 dark-input px-5 py-4 text-sm font-bold">
+                    <input type="number" id="in-price" placeholder="價格" class="w-24 dark-input px-5 py-4 text-sm font-black">
+                </div>
+                
+                <div class="flex gap-2">
+                    <div onclick="document.getElementById('in-file').click()" id="ui-img-label" class="flex-1 bg-white/5 border border-dashed border-white/10 rounded-2xl flex items-center justify-center h-14 cursor-pointer text-[9px] text-white/20 font-bold uppercase">加入照片</div>
+                    <button id="add-btn" onclick="handleAdd()" class="bg-white text-black px-10 rounded-2xl font-black text-[10px] uppercase active:scale-95">Add</button>
+                </div>
+                <input type="file" id="in-file" class="hidden" accept="image/*">
+            </section>
 
-        <!-- 清單列表 -->
-        <div id="items-grid" class="space-y-4"></div>
+            <div id="item-list" class="space-y-4"></div>
+        </div>
+
+        <div id="view-stats" class="hidden py-4 space-y-8">
+            <div class="flex bg-zinc-900/50 p-1 rounded-full border border-white/5 max-w-[200px] mx-auto">
+                <button id="toggle-cat" onclick="setStatType('category')" class="flex-1 py-2 rounded-full text-[10px] font-black uppercase transition-all duration-300 active">類別</button>
+                <button id="toggle-tar" onclick="setStatType('target')" class="flex-1 py-2 rounded-full text-[10px] font-black uppercase transition-all duration-300">對象</button>
+            </div>
+            <style>
+                #toggle-cat.active, #toggle-tar.active { background: #fff; color: #000; }
+            </style>
+            <div class="relative w-56 h-56 mx-auto">
+                <canvas id="stat-chart"></canvas>
+                <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <div class="text-[8px] text-white/20 font-black uppercase tracking-widest">Spent</div>
+                    <div id="center-total" class="text-xl font-black">$0</div>
+                </div>
+            </div>
+            <div id="stat-list" class="space-y-6"></div>
+        </div>
     </main>
+
+    <div class="fixed bottom-8 inset-x-0 flex justify-center z-50">
+        <div class="bg-zinc-900/90 backdrop-blur-2xl px-12 py-4 rounded-full border border-white/10 flex gap-20 shadow-2xl">
+            <button onclick="setTab('list')" id="nav-list" class="nav-btn active flex flex-col items-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                <div class="nav-indicator"></div>
+            </button>
+            <button onclick="setTab('stats')" id="nav-stats" class="nav-btn flex flex-col items-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="12" r="9"/></svg>
+                <div class="nav-indicator"></div>
+            </button>
+        </div>
+    </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getDatabase, ref, push, onValue, remove, update } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, getDocs, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 您的 Firebase 配置
-        const firebaseConfig = {
-            apiKey: "AIzaSyCjZIN7D-OL99sNhQhcGotEDcWa_7F-x-o",
-            authDomain: "tako-4447b.firebaseapp.com",
-            projectId: "tako-4447b",
-            databaseURL: "https://tako-4447b-default-rtdb.firebaseio.com",
-            storageBucket: "tako-4447b.firebasestorage.app",
-            messagingSenderId: "804718134895",
-            appId: "1:804718134895:web:69e6b15fc6b5f28a512f9a"
-        };
-
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'myshopping-vlist-final';
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getDatabase(app);
+        const db = getFirestore(app);
 
-        // 登入並同步資料
-        signInAnonymously(auth).then(() => {
-            const itemsRef = ref(db, 'items');
-            onValue(itemsRef, (snapshot) => {
-                const data = snapshot.val();
-                const itemList = data ? Object.entries(data).map(([id, val]) => ({id, ...val})) : [];
-                // 排序：未買的在前
-                itemList.sort((a, b) => a.bought - b.bought);
-                render(itemList);
-                document.getElementById('auth-loading').classList.add('hidden');
+        let s = { 
+            items: JSON.parse(localStorage.getItem('my_items')) || [], 
+            targets: JSON.parse(localStorage.getItem('my_targets')) || ["自己", "家人", "朋友"], 
+            cats: JSON.parse(localStorage.getItem('my_cats')) || ["藥妝", "零食", "精品"], 
+            selT: "自己", 
+            selC: "藥妝", 
+            rates: JSON.parse(localStorage.getItem('my_rates')) || { KRW: 41, JPY: 4.6, USD: 0.03 }, 
+            img: null, chart: null, user: null,
+            statType: 'category'
+        };
+
+        window.onload = () => {
+            renderTagsUI();
+            renderListUI();
+            fetchRates();
+            initFirebase();
+        };
+
+        async function initFirebase() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    s.user = user;
+                    silentSync();
+                } else {
+                    await signInAnonymously(auth);
+                }
             });
-        }).catch(err => {
-            document.getElementById('status-text').innerText = "連線失敗";
-            document.getElementById('error-log').innerText = "錯誤：請在 Firebase 中啟動「Authentication」內的「匿名登入」。";
-            console.error(err);
-        });
+        }
 
-        window.addItem = () => {
-            const name = document.getElementById('item-name').value.trim();
-            const price = parseFloat(document.getElementById('item-price').value) || 0;
-            const currency = document.getElementById('item-currency').value;
+        async function silentSync() {
+            try {
+                const itemCol = collection(db, 'artifacts', appId, 'public', 'data', 'items');
+                const snap = await getDocs(itemCol);
+                if (!snap.empty) {
+                    s.items = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    saveLocal(); renderListUI();
+                }
+                const setSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data'));
+                const settingsDoc = snap.docs.find(d => d.id === 'settings');
+                if(settingsDoc) {
+                    const data = settingsDoc.data();
+                    if(data.targets) s.targets = data.targets;
+                    if(data.categories) s.cats = data.categories;
+                    saveLocal(); renderTagsUI();
+                }
+            } catch(e) {}
+        }
+
+        window.cloudSync = async () => {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.style.display = 'flex';
+            await silentSync();
+            setTimeout(() => { overlay.style.display = 'none'; }, 500);
+        };
+
+        function saveLocal() {
+            localStorage.setItem('my_items', JSON.stringify(s.items));
+            localStorage.setItem('my_targets', JSON.stringify(s.targets));
+            localStorage.setItem('my_cats', JSON.stringify(s.cats));
+        }
+
+        // --- 標籤清單管理邏輯 ---
+        window.openModal = () => {
+            renderEditModalLists();
+            document.getElementById('modal-overlay').style.display = 'flex';
+        };
+
+        window.closeModal = () => {
+            document.getElementById('modal-overlay').style.display = 'none';
+        };
+
+        function renderEditModalLists() {
+            const tList = document.getElementById('edit-targets-list');
+            const cList = document.getElementById('edit-cats-list');
+            
+            tList.innerHTML = s.targets.map(t => `
+                <div class="edit-tag-item">
+                    ${t} <span onclick="removeTag('T','${t}')" class="ml-1 opacity-40 cursor-pointer">✕</span>
+                </div>
+            `).join('');
+            
+            cList.innerHTML = s.cats.map(c => `
+                <div class="edit-tag-item">
+                    ${c} <span onclick="removeTag('C','${c}')" class="ml-1 opacity-40 cursor-pointer">✕</span>
+                </div>
+            `).join('');
+        }
+
+        window.quickAddTag = (type) => {
+            const inputId = type === 'T' ? 'add-target-input' : 'add-cat-input';
+            const input = document.getElementById(inputId);
+            const val = input.value.trim();
+            if(!val) return;
+            
+            if(type === 'T' && !s.targets.includes(val)) s.targets.push(val);
+            if(type === 'C' && !s.cats.includes(val)) s.cats.push(val);
+            
+            input.value = '';
+            saveLocal();
+            renderEditModalLists();
+            renderTagsUI();
+            syncSettingsToCloud();
+        };
+
+        window.removeTag = (type, val) => {
+            if(type === 'T') s.targets = s.targets.filter(x => x !== val);
+            if(type === 'C') s.cats = s.cats.filter(x => x !== val);
+            
+            // 確保至少留一個
+            if(s.targets.length === 0) s.targets = ["未分類"];
+            if(s.cats.length === 0) s.cats = ["未分類"];
+            
+            if(s.selT === val) s.selT = s.targets[0];
+            if(s.selC === val) s.selC = s.cats[0];
+
+            saveLocal();
+            renderEditModalLists();
+            renderTagsUI();
+            syncSettingsToCloud();
+        };
+
+        function syncSettingsToCloud() {
+            if(s.user) {
+                setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings'), { targets: s.targets, categories: s.cats }, { merge: true });
+            }
+        }
+
+        window.renderTagsUI = () => {
+            document.getElementById('ui-targets').innerHTML = s.targets.map(t => `<button onclick="selectTag('T','${t}')" class="tag-btn ${s.selT === t ? 'active' : ''}">${t}</button>`).join('');
+            document.getElementById('ui-categories').innerHTML = s.cats.map(c => `<button onclick="selectTag('C','${c}')" class="tag-btn ${s.selC === c ? 'active' : ''}">${c}</button>`).join('');
+        };
+
+        window.selectTag = (type, val) => {
+            if (type === 'T') s.selT = val; else s.selC = val;
+            renderTagsUI();
+        };
+
+        window.handleAdd = async () => {
+            const btn = document.getElementById('add-btn');
+            const nameEl = document.getElementById('in-name');
+            const priceEl = document.getElementById('in-price');
+            const name = nameEl.value.trim();
+            const price = parseFloat(priceEl.value) || 0;
+            const curr = document.getElementById('in-curr').value;
+
             if(!name) return;
+            btn.disabled = true;
 
-            push(ref(db, 'items'), {
-                name, price, currency,
-                bought: false,
-                createdAt: Date.now()
-            });
+            const twd = curr === 'TWD' ? price : (price / (s.rates[curr] || 1));
+            const newId = "it_" + Date.now();
+            const newItem = {
+                id: newId, name, price, currency: curr, target: s.selT, category: s.selC,
+                priceInTWD: twd, image: s.img, bought: false, createdAt: Date.now()
+            };
 
-            document.getElementById('item-name').value = '';
-            document.getElementById('item-price').value = '';
+            s.items.unshift(newItem);
+            saveLocal(); renderListUI();
+            nameEl.value = ''; priceEl.value = ''; s.img = null;
+            document.getElementById('ui-img-label').innerText = '加入照片';
+            btn.disabled = false;
+            if(s.user) setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'items', newId), newItem);
         };
 
-        window.toggleStatus = (id, status) => {
-            update(ref(db, 'items/' + id), { bought: !status });
-        };
-
-        window.deleteItem = (id) => {
-            if(confirm('確定要刪除嗎？')) remove(ref(db, 'items/' + id));
-        };
-
-        function render(items) {
-            const grid = document.getElementById('items-grid');
-            grid.innerHTML = '';
-            let p = 0, s = 0;
-
-            items.forEach(item => {
-                if(item.bought) s += item.price; else p += item.price;
-                
-                grid.innerHTML += `
-                    <div class="glass-card p-5 rounded-3xl flex justify-between items-center shadow-md border ${item.bought ? 'opacity-50 grayscale' : ''}">
-                        <div class="flex-1">
-                            <h3 class="font-black text-slate-800">${item.name}</h3>
-                            <p class="text-sm font-mono font-bold text-blue-600">${item.currency} ${item.price.toLocaleString()}</p>
+        window.renderListUI = () => {
+            const list = document.getElementById('item-list');
+            let sTotal = 0, bTotal = 0;
+            const sorted = [...s.items].sort((a,b) => (a.bought ? 1 : -1));
+            list.innerHTML = sorted.map(i => {
+                const twd = i.priceInTWD || 0;
+                if(i.bought) sTotal += twd; else bTotal += twd;
+                return `
+                <div class="item-card bg-zinc-900/40 border border-white/5 p-4 rounded-3xl flex items-center gap-4 ${i.bought ? 'opacity-20' : ''}">
+                    <div class="w-14 h-14 bg-white/5 rounded-2xl overflow-hidden flex items-center justify-center shrink-0">
+                        ${i.image ? `<img src="${i.image}" class="w-full h-full object-cover">` : '<span class="text-[8px] opacity-10 font-bold">無</span>'}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex gap-1.5 mb-1.5">
+                            <span class="text-[7px] font-bold bg-white/10 px-1.5 py-0.5 rounded text-white/50">${i.target}</span>
+                            <span class="text-[7px] font-bold bg-white/5 px-1.5 py-0.5 rounded text-white/30">${i.category}</span>
                         </div>
-                        <div class="flex gap-3">
-                            <button onclick="toggleStatus('${item.id}', ${item.bought})" class="px-5 py-2 rounded-xl text-xs font-black shadow-inner ${item.bought ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}">
-                                ${item.bought ? '已購買' : '待購中'}
-                            </button>
-                            <button onclick="deleteItem('${item.id}')" class="text-slate-300 hover:text-red-500 transition-colors">✕</button>
+                        <div class="text-sm font-bold truncate">${i.name}</div>
+                        <div class="text-[10px] font-mono opacity-20">${i.currency} ${i.price.toLocaleString()}</div>
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <button onclick="doToggle('${i.id}', ${i.bought})" class="px-5 py-2.5 rounded-full text-[9px] font-black ${i.bought ? 'bg-white text-black' : 'border border-white/10 text-white'}">${i.bought ? '已買' : '要買'}</button>
+                        <button onclick="doDel('${i.id}')" class="text-[8px] text-white/5">刪除</button>
+                    </div>
+                </div>`;
+            }).join('');
+            document.getElementById('total-spent').innerText = `$${Math.round(sTotal).toLocaleString()}`;
+            document.getElementById('total-budget').innerText = `$${Math.round(bTotal).toLocaleString()}`;
+            if(document.getElementById('center-total')) document.getElementById('center-total').innerText = `$${Math.round(sTotal).toLocaleString()}`;
+        };
+
+        window.doToggle = (id, b) => {
+            const it = s.items.find(x => x.id === id);
+            if(it) {
+                it.bought = !b;
+                saveLocal(); renderListUI();
+                if(s.user) updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'items', id), { bought: !b });
+            }
+        };
+        
+        window.doDel = (id) => {
+            if(!confirm("確定刪除此品項？")) return;
+            s.items = s.items.filter(x => x.id !== id);
+            saveLocal(); renderListUI();
+            if(s.user) deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'items', id));
+        };
+
+        window.setTab = (t) => {
+            document.getElementById('view-list').classList.toggle('hidden', t !== 'list');
+            document.getElementById('view-stats').classList.toggle('hidden', t !== 'stats');
+            document.getElementById('nav-list').classList.toggle('active', t === 'list');
+            document.getElementById('nav-stats').classList.toggle('active', t === 'stats');
+            if(t === 'stats') renderChart();
+        };
+
+        window.setStatType = (type) => {
+            s.statType = type;
+            document.getElementById('toggle-cat').classList.toggle('active', type === 'category');
+            document.getElementById('toggle-tar').classList.toggle('active', type === 'target');
+            renderChart();
+        };
+
+        function renderChart() {
+            const key = s.statType;
+            const dataMap = {};
+            let grandTotal = 0;
+            s.items.filter(i => i.bought).forEach(i => {
+                const label = i[key] || "未分類";
+                const amt = i.priceInTWD || 0;
+                dataMap[label] = (dataMap[label] || 0) + amt;
+                grandTotal += amt;
+            });
+            const labels = Object.keys(dataMap);
+            const values = Object.values(dataMap);
+            document.getElementById('stat-list').innerHTML = labels.map((l, i) => {
+                const perc = grandTotal > 0 ? (values[i] / grandTotal * 100).toFixed(0) : 0;
+                return `
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-end">
+                            <div>
+                                <span class="text-[9px] font-bold text-white/20 uppercase tracking-widest">${l}</span>
+                                <div class="text-xs font-black">$${Math.round(values[i]).toLocaleString()}</div>
+                            </div>
+                            <span class="text-[10px] font-mono text-white/40">${perc}%</span>
+                        </div>
+                        <div class="h-[2px] w-full bg-white/5 rounded-full overflow-hidden">
+                            <div class="h-full bg-white transition-all duration-1000" style="width: ${perc}%"></div>
                         </div>
                     </div>`;
+            }).join('');
+            if(s.chart) s.chart.destroy();
+            s.chart = new Chart(document.getElementById('stat-chart'), {
+                type: 'doughnut',
+                data: { labels: labels, datasets: [{ data: values, backgroundColor: ['#FFFFFF', '#A1A1AA', '#52525B', '#27272A', '#18181B'], borderWidth: 0 }] },
+                options: { cutout: '88%', plugins: { legend: { display: false } } }
             });
+            document.getElementById('center-total').innerText = `$${Math.round(grandTotal).toLocaleString()}`;
+        }
 
-            document.getElementById('planned-total').innerText = `$${Math.round(p).toLocaleString()}`;
-            document.getElementById('purchased-total').innerText = `$${Math.round(s).toLocaleString()}`;
+        document.getElementById('in-file').onchange = (e) => {
+            const f = e.target.files[0];
+            if(!f) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const img = new Image(); img.src = ev.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const max = 180; let w = img.width, h = img.height;
+                    if (w > max) { h = h * (max / w); w = max; }
+                    canvas.width = w; canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    s.img = canvas.toDataURL('image/jpeg', 0.4);
+                    document.getElementById('ui-img-label').innerText = '照片已就緒';
+                }
+            };
+            reader.readAsDataURL(f);
+        };
+
+        async function fetchRates() {
+            try {
+                const r = await fetch('https://open.er-api.com/v6/latest/TWD');
+                const d = await r.json();
+                s.rates = d.rates;
+                localStorage.setItem('my_rates', JSON.stringify(d.rates));
+                document.getElementById('ex-rate').innerText = `1 TWD ≈ JPY ${d.rates.JPY.toFixed(1)} / KRW ${d.rates.KRW.toFixed(0)}`;
+            } catch(e) {}
         }
     </script>
 </body>

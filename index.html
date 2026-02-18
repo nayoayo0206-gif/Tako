@@ -16,23 +16,14 @@
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         #root { min-height: 100vh; }
         input, select, button { outline: none !important; }
+        .animate-pop { animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes pop { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        /* 強制移除所有斜體繼承 */
+        * { font-style: normal !important; }
     </style>
 </head>
 <body>
     <div id="root"></div>
-
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc, collection, onSnapshot, query, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        window.FirebaseSDK = { 
-            initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
-            signInWithCustomToken, getFirestore, doc, setDoc, getDoc, 
-            updateDoc, deleteDoc, collection, onSnapshot, query, addDoc 
-        };
-        window.dispatchEvent(new Event('firebase-ready'));
-    </script>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
@@ -48,8 +39,6 @@
         };
 
         const App = () => {
-            const [fbReady, setFbReady] = useState(!!window.FirebaseSDK);
-            const [user, setUser] = useState(null);
             const [view, setView] = useState('list'); 
             const [statMode, setStatMode] = useState('category'); 
             const [items, setItems] = useState([]);
@@ -70,78 +59,50 @@
 
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
-            const firebaseInstance = useRef(null);
 
-            // 1. 初始化讀取
+            // 1. 初始化讀取 LocalStorage
             useEffect(() => {
-                const handleReady = () => setFbReady(true);
-                window.addEventListener('firebase-ready', handleReady);
-                
-                const localItems = localStorage.getItem('tako_items');
+                const localItems = localStorage.getItem('tako_v2_items');
                 if (localItems) setItems(JSON.parse(localItems));
-                const localTags = localStorage.getItem('tako_tags');
+                
+                const localTags = localStorage.getItem('tako_v2_tags');
                 if (localTags) {
                     const d = JSON.parse(localTags);
                     if (d.targets) setTargets(d.targets);
                     if (d.cats) setCats(d.cats);
                 }
-                return () => window.removeEventListener('firebase-ready', handleReady);
+                
+                // 匯率更新
+                fetch('https://open.er-api.com/v6/latest/TWD')
+                    .then(r => r.json())
+                    .then(d => setRates(d.rates))
+                    .catch(() => console.log("匯率更新失敗"));
             }, []);
 
-            // 2. Firebase 連線
+            // 2. 存入 LocalStorage
             useEffect(() => {
-                if (!fbReady) return;
-                const sdk = window.FirebaseSDK;
-                const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-                if (!config || !config.apiKey) return;
+                localStorage.setItem('tako_v2_items', JSON.stringify(items));
+            }, [items]);
 
-                const app = sdk.initializeApp(config);
-                const auth = sdk.getAuth(app);
-                const db = sdk.getFirestore(app);
-                firebaseInstance.current = { auth, db };
+            const saveTagsToLocal = (newT, newC) => {
+                localStorage.setItem('tako_v2_tags', JSON.stringify({ targets: newT, cats: newC }));
+            };
 
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await sdk.signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await sdk.signInAnonymously(auth);
-                        }
-                    } catch (e) { console.error("Auth Error:", e); }
-                };
-                initAuth();
-                const unsubscribe = sdk.onAuthStateChanged(auth, setUser);
-                return () => unsubscribe();
-            }, [fbReady]);
+            const handleAddTarget = () => {
+                if (!newTargetInput.trim()) return;
+                const newList = [...targets, newTargetInput.trim()];
+                setTargets(newList);
+                saveTagsToLocal(newList, cats);
+                setNewTargetInput("");
+            };
 
-            // 3. 雲端同步
-            useEffect(() => {
-                if (!user || !firebaseInstance.current) return;
-                const { db } = firebaseInstance.current;
-                const sdk = window.FirebaseSDK;
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-shopping-tako-v1';
-
-                const unsubItems = sdk.onSnapshot(sdk.collection(db, 'artifacts', appId, 'users', user.uid, 'items'), (snap) => {
-                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    const sorted = data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                    setItems(sorted);
-                    localStorage.setItem('tako_items', JSON.stringify(sorted));
-                });
-
-                const unsubSettings = sdk.onSnapshot(sdk.doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'tags'), (snap) => {
-                    if (snap.exists()) {
-                        const d = snap.data();
-                        if (d.targets) setTargets(d.targets);
-                        if (d.cats) setCats(d.cats);
-                        localStorage.setItem('tako_tags', JSON.stringify(d));
-                    }
-                });
-                return () => { unsubItems(); unsubSettings(); };
-            }, [user]);
-
-            useEffect(() => {
-                fetch('https://open.er-api.com/v6/latest/TWD').then(r => r.json()).then(d => setRates(d.rates)).catch(() => {});
-            }, []);
+            const handleAddCat = () => {
+                if (!newCatInput.trim()) return;
+                const newList = [...cats, newCatInput.trim()];
+                setCats(newList);
+                saveTagsToLocal(targets, newList);
+                setNewCatInput("");
+            };
 
             const stats = useMemo(() => {
                 const boughtItems = items.filter(i => i.bought);
@@ -173,93 +134,46 @@
                 }
             }, [view, stats]);
 
-            // 設定保存與管理
-            const saveTags = async (newT, newC) => {
-                localStorage.setItem('tako_tags', JSON.stringify({ targets: newT, cats: newC }));
-                if (!user || !firebaseInstance.current) return;
-                const { db } = firebaseInstance.current;
-                const sdk = window.FirebaseSDK;
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-shopping-tako-v1';
-                try {
-                    await sdk.setDoc(sdk.doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'tags'), { targets: newT, cats: newC, updatedAt: Date.now() }, { merge: true });
-                } catch(e) {}
-            };
-
-            const handleAddTarget = () => {
-                if (!newTargetInput.trim()) return;
-                const newList = [...targets, newTargetInput.trim()];
-                setTargets(newList);
-                saveTags(newList, cats);
-                setNewTargetInput("");
-            };
-
-            const handleAddCat = () => {
-                if (!newCatInput.trim()) return;
-                const newList = [...cats, newCatInput.trim()];
-                setCats(newList);
-                saveTags(targets, newList);
-                setNewCatInput("");
-            };
-
-            // 品項操作
-            const handleSaveItem = async () => {
+            const handleSaveItem = () => {
                 if (!name.trim()) return;
                 const p = parseFloat(price) || 0;
                 const twd = currency === 'TWD' ? p : (p / (rates[currency] || 1));
-                const data = { name: name.trim(), price: p, currency, target: selT, category: selC, priceInTWD: twd, image: img, updatedAt: Date.now() };
+                const data = { 
+                    name: name.trim(), 
+                    price: p, 
+                    currency, 
+                    target: selT, 
+                    category: selC, 
+                    priceInTWD: twd, 
+                    image: img, 
+                    updatedAt: Date.now() 
+                };
                 
-                if (user && firebaseInstance.current) {
-                    const { db } = firebaseInstance.current;
-                    const sdk = window.FirebaseSDK;
-                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-shopping-tako-v1';
-                    if (editingId) {
-                        await sdk.updateDoc(sdk.doc(db, 'artifacts', appId, 'users', user.uid, 'items', editingId), data);
-                    } else {
-                        await sdk.addDoc(sdk.collection(db, 'artifacts', appId, 'users', user.uid, 'items'), { ...data, bought: false, createdAt: Date.now() });
-                    }
+                if (editingId) {
+                    setItems(items.map(i => i.id === editingId ? { ...i, ...data } : i));
                 } else {
-                    let newItems;
-                    if (editingId) {
-                        newItems = items.map(i => i.id === editingId ? { ...i, ...data } : i);
-                    } else {
-                        newItems = [{ ...data, id: Date.now().toString(), bought: false, createdAt: Date.now() }, ...items];
-                    }
-                    setItems(newItems);
-                    localStorage.setItem('tako_items', JSON.stringify(newItems));
+                    const newItem = { 
+                        ...data, 
+                        id: Date.now().toString(), 
+                        bought: false, 
+                        createdAt: Date.now() 
+                    };
+                    setItems([newItem, ...items]);
                 }
                 setName(""); setPrice(""); setImg(null); setEditingId(null);
             };
 
-            const handleToggleBought = async (item) => {
-                const newVal = !item.bought;
-                if (user && firebaseInstance.current) {
-                    const { db } = firebaseInstance.current;
-                    const sdk = window.FirebaseSDK;
-                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-shopping-tako-v1';
-                    await sdk.updateDoc(sdk.doc(db, 'artifacts', appId, 'users', user.uid, 'items', item.id), { bought: newVal });
-                } else {
-                    const newItems = items.map(i => i.id === item.id ? { ...i, bought: newVal } : i);
-                    setItems(newItems);
-                    localStorage.setItem('tako_items', JSON.stringify(newItems));
-                }
+            const handleToggleBought = (id) => {
+                setItems(items.map(i => i.id === id ? { ...i, bought: !i.bought } : i));
             };
 
-            const handleDeleteItem = async (id) => {
-                if (user && firebaseInstance.current) {
-                    const { db } = firebaseInstance.current;
-                    const sdk = window.FirebaseSDK;
-                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-shopping-tako-v1';
-                    await sdk.deleteDoc(sdk.doc(db, 'artifacts', appId, 'users', user.uid, 'items', id));
-                } else {
-                    const newItems = items.filter(i => i.id !== id);
-                    setItems(newItems);
-                    localStorage.setItem('tako_items', JSON.stringify(newItems));
-                }
+            const handleDeleteItem = (id) => {
+                setItems(items.filter(i => i.id !== id));
                 setDeleteConfirmId(null);
             };
 
             return (
-                <div className="min-h-screen bg-black text-white pb-32 font-sans antialiased relative">
+                <div className="min-h-screen bg-black text-white pb-32 font-sans antialiased">
                     <header className="sticky top-0 z-40 bg-black/80 backdrop-blur-xl border-b border-white/5 px-6 py-6">
                         <div className="max-w-xl mx-auto flex justify-between items-center">
                             <h1 className="text-xl font-black tracking-widest uppercase">My購了沒<span className="opacity-40 lowercase ml-1">(˶˙๏˙˶)b</span></h1>
@@ -288,27 +202,30 @@
                                         <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="金額" className="flex-1 bg-transparent border-none py-4 text-left font-black text-lg font-mono focus:ring-0 pl-6 text-white" />
                                         <div className="h-8 w-px bg-white/10 ml-2"></div>
                                         <select value={currency} onChange={e => setCurrency(e.target.value)} className="bg-transparent border-none text-[10px] font-black px-6 text-white focus:ring-0 uppercase cursor-pointer">
-                                            <option value="TWD" className="bg-zinc-900">TWD</option>
-                                            <option value="KRW" className="bg-zinc-900">KRW</option>
-                                            <option value="JPY" className="bg-zinc-900">JPY</option>
-                                            <option value="USD" className="bg-zinc-900">USD</option>
+                                            <option value="TWD" className="bg-zinc-900 text-white">TWD</option>
+                                            <option value="KRW" className="bg-zinc-900 text-white">KRW</option>
+                                            <option value="JPY" className="bg-zinc-900 text-white">JPY</option>
+                                            <option value="USD" className="bg-zinc-900 text-white">USD</option>
                                         </select>
                                     </div>
                                     <div className="flex gap-3">
-                                        <button onClick={() => document.getElementById('cam-fix').click()} className="flex-1 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-[10px] font-black gap-2 border border-white/5 text-white">{img ? '✓ 已選照片' : <Icons.Camera size={18}/>}</button>
+                                        <button onClick={() => document.getElementById('cam-pure').click()} className="flex-1 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-[10px] font-black gap-2 border border-white/5 text-white">{img ? '✓ 已選照片' : <Icons.Camera size={18}/>}</button>
                                         <button onClick={handleSaveItem} className="px-12 h-14 bg-white text-black rounded-2xl font-black text-[11px] tracking-widest uppercase active:scale-95 transition-transform">{editingId ? '儲存' : '新增'}</button>
                                     </div>
-                                    <input type="file" id="cam-fix" className="hidden" accept="image/*" onChange={e => {
+                                    <input type="file" id="cam-pure" className="hidden" accept="image/*" onChange={e => {
                                         const f = e.target.files[0];
                                         if (f) { const r = new FileReader(); r.onload = ev => setImg(ev.target.result); r.readAsDataURL(f); }
                                     }} />
                                 </section>
 
                                 <div className="space-y-6">
+                                    {items.length === 0 && (
+                                        <div className="py-20 text-center text-white/10 font-black text-2xl tracking-tighter">購物清單空空的</div>
+                                    )}
                                     {items.map(item => (
-                                        <div key={item.id} className="bg-zinc-900/30 rounded-[2.5rem] border border-white/5 overflow-hidden transition-all">
+                                        <div key={item.id} className="bg-zinc-900/30 rounded-[2.5rem] border border-white/5 overflow-hidden transition-all animate-pop">
                                             <div className={`relative h-60 bg-zinc-950 flex items-center justify-center transition-opacity ${item.bought ? 'opacity-40 grayscale-[0.5]' : 'opacity-100'}`}>
-                                                {item.image ? <img src={item.image} className="w-full h-full object-cover" alt="" /> : <div className="text-white/5 font-black text-4xl italic">TAKO</div>}
+                                                {item.image ? <img src={item.image} className="w-full h-full object-cover" alt="" /> : <div className="text-white/5 font-black text-4xl">TAKO</div>}
                                                 <div className="absolute top-5 left-5 flex gap-2">
                                                     <span className="bg-white/90 text-black px-3 py-1.5 rounded-full text-[8px] font-black uppercase">{item.target}</span>
                                                     <span className="bg-black/40 backdrop-blur-md text-white px-3 py-1.5 rounded-full text-[8px] font-black uppercase border border-white/10">{item.category}</span>
@@ -322,7 +239,7 @@
                                                             ${Math.round(item.priceInTWD).toLocaleString()} TWD
                                                         </p>
                                                     </div>
-                                                    <button onClick={() => handleToggleBought(item)} className={`p-4 rounded-full transition-all ${item.bought ? 'bg-white text-black' : 'bg-white/5 text-white/30 border border-white/5'}`}>
+                                                    <button onClick={() => handleToggleBought(item.id)} className={`p-4 rounded-full transition-all ${item.bought ? 'bg-white text-black' : 'bg-white/5 text-white/30 border border-white/5'}`}>
                                                         {item.bought ? <Icons.CheckCircle2 size={24}/> : <Icons.Circle size={24}/>}
                                                     </button>
                                                 </div>
@@ -336,7 +253,7 @@
                                 </div>
                             </>
                         ) : (
-                            <div className="space-y-10 animate-in fade-in py-6">
+                            <div className="space-y-10 animate-pop py-6">
                                 <div className="bg-zinc-900/50 p-1.5 rounded-full border border-white/10 flex">
                                     <button onClick={() => setStatMode('category')} className={`flex-1 py-3 rounded-full text-[10px] font-black uppercase transition-all ${statMode === 'category' ? 'bg-white text-black' : 'text-white/30'}`}>類別</button>
                                     <button onClick={() => setStatMode('target')} className={`flex-1 py-3 rounded-full text-[10px] font-black uppercase transition-all ${statMode === 'target' ? 'bg-white text-black' : 'text-white/30'}`}>對象</button>
@@ -350,7 +267,7 @@
                                                 <p className="text-2xl font-black mt-1 text-white">${Math.round(stats.total).toLocaleString()}</p>
                                             </div>
                                         </>
-                                    ) : <div className="text-white/20 font-black italic">尚無數據</div>}
+                                    ) : <div className="text-white/20 font-black">尚無數據</div>}
                                 </div>
                                 <div className="space-y-3">
                                     {Object.entries(stats.dataMap).map(([label, val]) => (
@@ -371,17 +288,16 @@
                         </div>
                     </nav>
 
-                    {/* SETTINGS PANEL */}
                     {showSettings && (
-                        <div className="fixed inset-0 z-[100] bg-black p-10 overflow-y-auto animate-in slide-in-from-bottom duration-300">
+                        <div className="fixed inset-0 z-[100] bg-black p-10 overflow-y-auto animate-pop">
                             <div className="max-w-md mx-auto space-y-12 pb-24">
                                 <div className="flex justify-between items-center">
-                                    <h2 className="text-2xl font-black tracking-widest italic text-white uppercase">Settings</h2>
+                                    <h2 className="text-2xl font-black tracking-widest text-white uppercase tracking-tighter">SETTINGS</h2>
                                     <button onClick={() => setShowSettings(false)} className="w-12 h-12 bg-white text-black rounded-full flex items-center justify-center active:scale-90 transition-transform"><Icons.X/></button>
                                 </div>
                                 <div className="space-y-10">
                                     <div className="space-y-4">
-                                        <p className="text-[10px] font-black text-white/30 uppercase tracking-widest">對象管理 (TARGETS)</p>
+                                        <p className="text-[10px] font-black text-white/30 uppercase tracking-widest">對象管理</p>
                                         <div className="flex gap-2">
                                             <input value={newTargetInput} onChange={e => setNewTargetInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddTarget()} className="flex-1 bg-white/5 rounded-xl border border-white/5 p-4 text-xs font-black text-white" placeholder="新增對象名稱..." />
                                             <button onClick={handleAddTarget} className="bg-white text-black px-6 rounded-xl font-black active:scale-95">+</button>
@@ -390,10 +306,56 @@
                                             {targets.map(t => (
                                                 <div key={t} className="px-4 py-2 bg-zinc-900 border border-white/5 rounded-lg text-[10px] font-black flex items-center gap-3">
                                                     <span>{t}</span>
-                                                    <button onClick={() => {const n = targets.filter(x => x !== t); setTargets(n); saveTags(n, cats);}} className="text-red-500 opacity-60 hover:opacity-100">✕</button>
+                                                    <button onClick={() => {const n = targets.filter(x => x !== t); setTargets(n); saveTagsToLocal(n, cats);}} className="text-red-500 opacity-60 hover:opacity-100">✕</button>
                                                 </div>
                                             ))}
                                         </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <p className="text-[10px] font-black text-white/30 uppercase tracking-widest">分類管理</p>
+                                        <div className="flex gap-2">
+                                            <input value={newCatInput} onChange={e => setNewCatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddCat()} className="flex-1 bg-white/5 rounded-xl border border-white/5 p-4 text-xs font-black text-white" placeholder="新增分類名稱..." />
+                                            <button onClick={handleAddCat} className="bg-white text-black px-6 rounded-xl font-black active:scale-95">+</button>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 pt-2">
+                                            {cats.map(c => (
+                                                <div key={c} className="px-4 py-2 bg-zinc-900 border border-white/5 rounded-lg text-[10px] font-black flex items-center gap-3">
+                                                    <span>{c}</span>
+                                                    <button onClick={() => {const n = cats.filter(x => x !== c); setCats(n); saveTagsToLocal(targets, n);}} className="text-red-500 opacity-60 hover:opacity-100">✕</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="pt-10">
+                                        <p className="text-[10px] font-black text-white/20 text-center uppercase">本地儲存模式 (LocalStorage)</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {deleteConfirmId && (
+                        <div className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center p-6 text-center">
+                            <div className="bg-zinc-900 p-10 rounded-[2.5rem] border border-white/10 w-full max-w-xs space-y-8 shadow-2xl animate-pop">
+                                <p className="font-black uppercase tracking-widest text-sm text-white">確認刪除該品項？</p>
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => handleDeleteItem(deleteConfirmId)} className="py-5 bg-red-500 text-white rounded-2xl font-black text-[10px] uppercase active:scale-95 transition-transform">刪除</button>
+                                    <button onClick={() => setDeleteConfirmId(null)} className="py-5 bg-white/5 text-white/40 rounded-2xl font-black text-[10px] uppercase active:scale-95 transition-transform">取消</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+
                                     </div>
                                     <div className="space-y-4">
                                         <p className="text-[10px] font-black text-white/30 uppercase tracking-widest">分類管理 (CATEGORIES)</p>

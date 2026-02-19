@@ -84,6 +84,13 @@
             transform: scale(0.92);
             opacity: 0.7;
         }
+
+        /* 圓餅圖動畫 */
+        @keyframes pie-show {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .pie-container { animation: pie-show 0.5s ease-out forwards; }
     </style>
 </head>
 <body>
@@ -104,6 +111,53 @@
             Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         };
 
+        const PieChart = ({ data }) => {
+            const total = data.reduce((sum, item) => sum + item.value, 0);
+            let cumulativePercent = 0;
+
+            const getCoordinatesForPercent = (percent) => {
+                const x = Math.cos(2 * Math.PI * percent);
+                const y = Math.sin(2 * Math.PI * percent);
+                return [x, y];
+            };
+
+            if (total === 0) return null;
+
+            return (
+                <div className="flex flex-col items-center gap-8 py-4 pie-container">
+                    <svg viewBox="-1.2 -1.2 2.4 2.4" className="w-48 h-48 -rotate-90">
+                        {data.map((item, index) => {
+                            const [startX, startY] = getCoordinatesForPercent(cumulativePercent);
+                            const percent = item.value / total;
+                            cumulativePercent += percent;
+                            const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
+                            const largeArcFlag = percent > 0.5 ? 1 : 0;
+                            const pathData = [
+                                `M ${startX} ${startY}`,
+                                `A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY}`,
+                                `L 0 0`,
+                            ].join(' ');
+
+                            const colors = ['#ff7eb9', '#7ee8ff', '#b97eff', '#ffffff33', '#ffffff1a'];
+                            return <path key={index} d={pathData} fill={item.color || colors[index % colors.length]} />;
+                        })}
+                        <circle cx="0" cy="0" r="0.6" fill="#000" />
+                    </svg>
+                    <div className="w-full space-y-3">
+                        {data.map((item, index) => (
+                            <div key={index} className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-2.5 h-2.5 rounded-full" style={{ background: item.color || ['#ff7eb9', '#7ee8ff', '#b97eff', '#ffffff33', '#ffffff1a'][index % 5] }} />
+                                    <span className="text-[11px] font-bold opacity-60 uppercase tracking-widest">{item.name}</span>
+                                </div>
+                                <span className="text-[11px] font-num font-black">NT$ {Math.round(item.value).toLocaleString()}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [view, setView] = useState('list');
             const [items, setItems] = useState([]);
@@ -117,13 +171,38 @@
             const [selC, setSelC] = useState("藥妝");
             const [targets, setTargets] = useState(["自己", "家人", "朋友"]);
             const [categories, setCategories] = useState(["藥妝", "服飾", "零食", "電器"]);
+            const [rates, setRates] = useState({ JPY: 0.21, KRW: 0.024 });
+            const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
             
-            const rates = { JPY: 0.211, KRW: 0.0238 };
             const scrollRef = useRef(null);
 
+            // 鍵盤偵測
             useEffect(() => {
-                const savedItems = localStorage.getItem('mybuy_v11_items');
-                const savedTags = localStorage.getItem('mybuy_v11_tags');
+                const handleResize = () => {
+                    const isVisible = window.innerHeight < 500;
+                    setIsKeyboardVisible(isVisible);
+                };
+                window.addEventListener('resize', handleResize);
+                return () => window.removeEventListener('resize', handleResize);
+            }, []);
+
+            // 即時匯率
+            useEffect(() => {
+                const fetchRates = async () => {
+                    try {
+                        const res = await fetch('https://open.er-api.com/v6/latest/TWD');
+                        const data = await res.json();
+                        if (data?.rates) {
+                            setRates({ JPY: 1 / data.rates.JPY, KRW: 1 / data.rates.KRW });
+                        }
+                    } catch (e) { console.error(e); }
+                };
+                fetchRates();
+            }, []);
+
+            useEffect(() => {
+                const savedItems = localStorage.getItem('mybuy_v13_items');
+                const savedTags = localStorage.getItem('mybuy_v13_tags');
                 if (savedItems) setItems(JSON.parse(savedItems));
                 if (savedTags) {
                     const parsed = JSON.parse(savedTags);
@@ -133,22 +212,35 @@
             }, []);
 
             useEffect(() => { 
-                localStorage.setItem('mybuy_v11_items', JSON.stringify(items));
-                localStorage.setItem('mybuy_v11_tags', JSON.stringify({ t: targets, c: categories }));
+                localStorage.setItem('mybuy_v13_items', JSON.stringify(items));
+                localStorage.setItem('mybuy_v13_tags', JSON.stringify({ t: targets, c: categories }));
             }, [items, targets, categories]);
 
             const getTWD = (item) => {
-                let rate = 1;
-                if (item.currency === 'JPY') rate = rates.JPY;
-                if (item.currency === 'KRW') rate = rates.KRW;
-                return (parseFloat(item.price) || 0) * rate;
+                let r = 1;
+                if (item.currency === 'JPY') r = rates.JPY;
+                if (item.currency === 'KRW') r = rates.KRW;
+                return (parseFloat(item.price) || 0) * r;
             };
 
             const stats = useMemo(() => {
-                const bought = items.filter(i => i.bought).reduce((acc, i) => acc + getTWD(i), 0);
-                const planned = items.filter(i => !i.bought).reduce((acc, i) => acc + getTWD(i), 0);
-                return { bought, planned };
-            }, [items]);
+                const b = items.filter(i => i.bought).reduce((acc, i) => acc + getTWD(i), 0);
+                const p = items.filter(i => !i.bought).reduce((acc, i) => acc + getTWD(i), 0);
+                
+                const byCat = categories.map(cat => ({
+                    name: cat,
+                    value: items.filter(i => i.category === cat).reduce((acc, i) => acc + getTWD(i), 0)
+                })).filter(x => x.value > 0);
+
+                const targetColors = { "自己": "#ff7eb9", "家人": "#7ee8ff", "朋友": "#b97eff" };
+                const byTar = targets.map(t => ({
+                    name: t,
+                    value: items.filter(i => i.target === t).reduce((acc, i) => acc + getTWD(i), 0),
+                    color: targetColors[t] || null
+                })).filter(x => x.value > 0);
+
+                return { bought: b, planned: p, byCategory: byCat, byTarget: byTar };
+            }, [items, rates, categories, targets]);
 
             const handleSubmit = () => {
                 if (!name.trim()) return;
@@ -159,18 +251,6 @@
                     setItems(prev => [{ id: Date.now().toString(), name: name.trim(), price: parseFloat(price) || 0, currency, target: selT, category: selC, image: img, bought: false }, ...prev]);
                 }
                 setName(""); setPrice(""); setImg(null);
-            };
-
-            const handleResetData = () => {
-                // 直接清空項目列表
-                setItems([]);
-                setEditingId(null);
-                setName(""); setPrice(""); setImg(null);
-                setShowTags(false);
-            };
-
-            const handleDeleteItem = (id) => {
-                setItems(prev => prev.filter(i => i.id !== id));
             };
 
             const TagManager = ({ title, list, setList }) => {
@@ -188,7 +268,7 @@
                         </div>
                         <div className="relative flex items-center">
                             <input value={val} onChange={e => setVal(e.target.value)} className="w-full bg-white/5 rounded-2xl px-5 py-4 text-sm font-bold pr-16 border border-white/10" placeholder="新增..." />
-                            <div onTouchStart={() => { if(val.trim()){ setList([...list, val.trim()]); setVal(""); }}} className="absolute right-2 w-10 h-10 bg-white text-black rounded-xl flex items-center justify-center"><Icons.Plus size={18} /></div>
+                            <div onTouchStart={() => { if(val.trim()){ setList([...list, val.trim()]); setVal(""); }}} className="absolute right-2 w-10 h-10 bg-white text-black rounded-xl flex items-center justify-center cursor-pointer"><Icons.Plus size={18} /></div>
                         </div>
                     </div>
                 );
@@ -196,7 +276,7 @@
 
             return (
                 <div ref={scrollRef} className="scroll-container no-scrollbar">
-                    {!showTags && items.length === 0 && view === 'list' && <div className="empty-watermark">(˶˙๏˙˶)</div>}
+                    {!showTags && items.length === 0 && view === 'list' && <div className="empty-watermark">(˶˙๏˙˶)b</div>}
                     <div className="w-full max-w-[90%] mx-auto pb-20">
                         <header className="flex justify-between items-center pt-12 mb-4">
                             <h1 className="text-xl font-[900] tracking-tighter">My購了沒 (˶˙๏˙˶)b</h1>
@@ -206,19 +286,23 @@
                             <div className="grid grid-cols-2 gap-4 mb-3">
                                 <div className="text-center p-2">
                                     <p className="text-[10px] opacity-40 font-black tracking-[0.2em] uppercase mb-1">已花費</p>
-                                    <p className="text-2xl font-num text-white tracking-tighter font-num"><span className="text-[10px] opacity-30 mr-1">NT$</span>{Math.round(stats.bought).toLocaleString()}</p>
+                                    <p className="text-2xl font-num text-white tracking-tighter"><span className="text-[10px] opacity-30 mr-1">NT$</span>{Math.round(stats.bought).toLocaleString()}</p>
                                 </div>
                                 <div className="text-center p-2 border-l border-white/5">
                                     <p className="text-[10px] opacity-40 font-black tracking-[0.2em] uppercase mb-1">預定花費</p>
-                                    <p className="text-2xl font-num text-white tracking-tighter opacity-80 font-num"><span className="text-[10px] opacity-30 mr-1">NT$</span>{Math.round(stats.planned).toLocaleString()}</p>
+                                    <p className="text-2xl font-num text-white tracking-tighter opacity-80"><span className="text-[10px] opacity-30 mr-1">NT$</span>{Math.round(stats.planned).toLocaleString()}</p>
                                 </div>
+                            </div>
+                            <div className="flex justify-center gap-6 opacity-30 text-[9px] font-num font-black uppercase tracking-[0.2em]">
+                                <span>JPY ➔ {rates.JPY.toFixed(4)}</span>
+                                <span>KRW ➔ {rates.KRW.toFixed(4)}</span>
                             </div>
                         </div>
 
                         {view === 'list' ? (
                             <div className="space-y-8 mt-6 pb-24">
                                 <section className="nav-glass rounded-[2.5rem] p-6 space-y-6">
-                                    <input value={name} onChange={e => setName(e.target.value)} className="w-full text-xl font-[900] placeholder:opacity-20" placeholder="想買什麼？" />
+                                    <input value={name} onChange={e => setName(e.target.value)} className="w-full text-xl font-[900] placeholder:opacity-20" placeholder="要買什麼好咧？" />
                                     <div className="flex items-center justify-between border-b border-white/10 pb-3">
                                         <div className="flex items-center gap-3 flex-1">
                                             <span className="text-[9px] font-num opacity-30 tracking-widest uppercase">PRICE</span>
@@ -264,7 +348,7 @@
                                             {!item.bought && (
                                                 <div className="flex justify-end gap-6 px-4">
                                                     <button onTouchStart={() => { setEditingId(item.id); setName(item.name); setPrice(item.price.toString()); setCurrency(item.currency); setImg(item.image); setSelT(item.target); setSelC(item.category); scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex items-center gap-1.5 text-[10px] font-black text-blue-400 uppercase tracking-widest"><Icons.Edit /> 編輯</button>
-                                                    <button onTouchStart={() => handleDeleteItem(item.id)} className="flex items-center gap-1.5 text-[10px] font-black text-red-500 uppercase tracking-widest"><Icons.Trash /> 刪除</button>
+                                                    <button onTouchStart={() => setItems(prev => prev.filter(i => i.id !== item.id))} className="flex items-center gap-1.5 text-[10px] font-black text-red-500 uppercase tracking-widest"><Icons.Trash /> 刪除</button>
                                                 </div>
                                             )}
                                         </div>
@@ -272,16 +356,30 @@
                                 </div>
                             </div>
                         ) : (
-                            <div className="py-20 text-center uppercase opacity-20 text-[10px] font-black tracking-widest">
-                                先新增點東西再來看統計ㄅ (˶˙๏˙˶)
+                            <div className="space-y-16 mt-10 pb-24">
+                                {stats.byTarget.length > 0 && (
+                                    <div className="p-8 border border-white/5 rounded-[2.5rem]">
+                                        <p className="text-[10px] font-black opacity-30 tracking-[0.3em] uppercase mb-8 text-center">對象統計 (Who)</p>
+                                        <PieChart data={stats.byTarget} />
+                                    </div>
+                                )}
+                                {stats.byCategory.length > 0 && (
+                                    <div className="p-8 border border-white/5 rounded-[2.5rem]">
+                                        <p className="text-[10px] font-black opacity-30 tracking-[0.3em] uppercase mb-8 text-center">分類統計 (What)</p>
+                                        <PieChart data={stats.byCategory} />
+                                    </div>
+                                )}
+                                {items.length === 0 && <div className="py-20 text-center opacity-20 text-[10px] font-black tracking-widest">【尚未有資料(˶˙๏˙˶)】</div>}
                             </div>
                         )}
                     </div>
                     
-                    <nav className="fixed bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-12 px-10 py-5 rounded-[2.5rem] nav-glass z-[80]">
-                        <div onTouchStart={() => {setView('list'); setShowTags(false);}} className={`p-1 ${view === 'list' && !showTags ? 'opacity-100 scale-125' : 'opacity-20'}`}><Icons.List/></div>
-                        <div onTouchStart={() => {setView('stats'); setShowTags(false);}} className={`p-1 ${view === 'stats' && !showTags ? 'opacity-100 scale-125' : 'opacity-20'}`}><Icons.Stats/></div>
-                    </nav>
+                    {!isKeyboardVisible && (
+                        <nav className="fixed bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-12 px-10 py-5 rounded-[2.5rem] nav-glass z-[80]">
+                            <div onTouchStart={() => {setView('list'); setShowTags(false);}} className={`p-1 ${view === 'list' && !showTags ? 'opacity-100 scale-125' : 'opacity-20'}`}><Icons.List/></div>
+                            <div onTouchStart={() => {setView('stats'); setShowTags(false);}} className={`p-1 ${view === 'stats' && !showTags ? 'opacity-100 scale-125' : 'opacity-20'}`}><Icons.Stats/></div>
+                        </nav>
+                    )}
 
                     {showTags && (
                         <div className="fixed inset-0 z-[100] bg-black p-6 overflow-y-auto no-scrollbar">
@@ -291,18 +389,13 @@
                                     <button onTouchStart={() => setShowTags(false)} className="px-8 py-3 bg-white text-black rounded-2xl text-[10px] font-black uppercase tracking-widest">完成</button>
                                 </div>
                                 <div className="space-y-14">
-                                    <TagManager title="對象分類 (Who)" list={targets} setList={setTargets} />
-                                    <TagManager title="物品分類 (What)" list={categories} setList={setCategories} />
+                                    <TagManager title="對象ㄉ分類 (Who)" list={targets} setList={setTargets} />
+                                    <TagManager title="物品ㄉ分類 (What)" list={categories} setList={setCategories} />
                                     <div className="pt-10 pb-10">
-                                        <p className="text-[10px] font-black text-red-500 tracking-[0.3em] uppercase mb-4">危險區域</p>
+                                        <p className="text-[10px] font-black text-red-500 tracking-[0.3em] uppercase mb-4">危險區域.ᐟ‪.ᐟ</p>
                                         <div className="border border-red-500/20 rounded-[2rem] p-8 text-center space-y-4">
                                             <p className="text-[11px] text-red-500/70 font-bold leading-relaxed">此操作將清空所有購物清單項目。</p>
-                                            <button 
-                                                onTouchStart={handleResetData}
-                                                className="w-full py-5 rounded-2xl bg-red-600/10 text-red-500 text-[10px] font-black uppercase tracking-widest border border-red-500/20"
-                                            >
-                                                RESET ALL ITEMS
-                                            </button>
+                                            <button onTouchStart={() => { setItems([]); setEditingId(null); setName(""); setPrice(""); setImg(null); setShowTags(false); }} className="w-full py-5 rounded-2xl bg-red-600/10 text-red-500 text-[10px] font-black uppercase tracking-widest border border-red-500/20">RESET ALL ITEMS</button>
                                         </div>
                                     </div>
                                 </div>
